@@ -33,7 +33,7 @@ def parse_styles(style_input: str) -> list:
         if name in style_map and style_map[name]:
             styles.append(style_map[name])
         else:
-            print(f"Warning: Unknown style '{name}', skipping...")
+            print(f"Warning: Unknown style '{name}', skipping...", file=sys.stderr)
     
     return styles if styles else None
 

@@ -355,7 +355,7 @@ class HashtagGenerator:
     BASE_HASHTAGS = {
         CreatorStyle.EDUCATIONAL: [
             "fyp", "foryou", "educational", "learnontiktok", "todayilearned",
-            "knowledge", "facts", "educational", "learn", "tutorial"
+            "knowledge", "facts", "edutok", "learn", "tutorial"
         ],
         CreatorStyle.ENTERTAINMENT: [
             "fyp", "foryou", "funny", "comedy", "humor",
@@ -388,7 +388,7 @@ class HashtagGenerator:
         # Extract potential topic-specific hashtags from prompt
         words = prompt.lower().split()
         topic_tags = [word.strip('.,!?') for word in words 
-                     if len(word) > 4 and word.isalpha()][:3]
+                     if len(word) >= 4 and word.isalpha()][:3]
         
         # Combine and ensure uniqueness
         all_tags = list(dict.fromkeys(base + topic_tags))
@@ -400,12 +400,7 @@ class MiniMax:
     """Main TikTok content generation pipeline"""
     
     def __init__(self):
-        self.hook_gen = HookGenerator()
-        self.script_gen = ScriptOutlineGenerator()
-        self.caption_gen = CaptionGenerator()
-        self.cta_gen = CTAGenerator()
-        self.hashtag_gen = HashtagGenerator()
-        self.safety_checker = ContentSafetyChecker()
+        pass
     
     def generate(self, prompt: str, styles: List[CreatorStyle] = None) -> List[TikTokContent]:
         """
@@ -429,15 +424,15 @@ class MiniMax:
         
         for style in styles:
             # Generate all components
-            hook = self.hook_gen.generate(prompt, style)
-            script_outline = self.script_gen.generate(prompt, style)
-            caption = self.caption_gen.generate(prompt, style)
-            cta = self.cta_gen.generate(style)
-            hashtags = self.hashtag_gen.generate(prompt, style)
+            hook = HookGenerator.generate(prompt, style)
+            script_outline = ScriptOutlineGenerator.generate(prompt, style)
+            caption = CaptionGenerator.generate(prompt, style)
+            cta = CTAGenerator.generate(style)
+            hashtags = HashtagGenerator.generate(prompt, style)
             
-            # Check content safety
-            combined_text = f"{hook} {caption} {cta}"
-            flags = self.safety_checker.check_content(combined_text)
+            # Check content safety (include script outline for comprehensive checking)
+            combined_text = f"{hook} {caption} {cta} {' '.join(script_outline)}"
+            flags = ContentSafetyChecker.check_content(combined_text)
             
             content = TikTokContent(
                 style=style,
