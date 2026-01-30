@@ -6,6 +6,7 @@ import { PlanResponse } from '@/lib/types';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { generateSRT, calculateAdRisk, AdRiskResult, simulateStyle, StyleVariant, STYLES, rewriteAdRisk } from '@/lib/helpers';
+import { getMockPlan } from '@/lib/mock';
 
 function cn(...inputs: (string | undefined | null | false)[]) {
   return twMerge(clsx(inputs));
@@ -21,12 +22,14 @@ const DEMO_CHIPS = [
 export default function Home() {
   // Config
   const [apiKey, setApiKey] = useState('');
+  const [runwayApiKey, setRunwayApiKey] = useState('');
   
   // Inputs
   const [prompt, setPrompt] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [style, setStyle] = useState<StyleVariant>('gen_z');
   const [fastMode, setFastMode] = useState(false);
+  const [useRunway, setUseRunway] = useState(false);
   
   // State
   const [loading, setLoading] = useState(false);
@@ -40,8 +43,15 @@ export default function Home() {
   const [selectedHook, setSelectedHook] = useState<string>('');
   const [adRisk, setAdRisk] = useState<AdRiskResult | null>(null);
   
+  // Auto-enable Runway if key is entered
+  useEffect(() => {
+    if (runwayApiKey) setUseRunway(true);
+  }, [runwayApiKey]);
+
   // Outputs
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoSource, setVideoSource] = useState<'runway' | 'minimax' | 'fallback' | null>(null);
+  const [finalPrompt, setFinalPrompt] = useState<string>('');
   const [srtContent, setSrtContent] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
@@ -62,22 +72,33 @@ export default function Home() {
     setPlan(null);
     setBasePlan(null);
     setVideoUrl(null);
+    setVideoSource(null);
+    setFinalPrompt('');
     setSrtContent('');
     setStep('planning');
 
     try {
       setStage('Planning content...');
-      addLog('Calling MiniMax-M2.1-lightning for planning...');
-      const planRes = await fetch('/api/plan', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-minimax-api-key': apiKey 
-        },
-        body: JSON.stringify({ prompt, imageUrl, format: 'auto' }), // Always auto, we simulate styles locally
-      });
-      if (!planRes.ok) throw new Error(await planRes.text());
-      const planData: PlanResponse = await planRes.json();
+      
+      let planData: PlanResponse;
+
+      if (!apiKey) {
+        addLog('⚠️ No MiniMax Key detected. Using local template plan...');
+        await new Promise(r => setTimeout(r, 1000)); // Simulate delay
+        planData = getMockPlan(prompt);
+      } else {
+        addLog('Calling MiniMax-M2.1-lightning for planning...');
+        const planRes = await fetch('/api/plan', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-minimax-api-key': apiKey 
+          },
+          body: JSON.stringify({ prompt, imageUrl, format: 'auto' }), 
+        });
+        if (!planRes.ok) throw new Error(await planRes.text());
+        planData = await planRes.json();
+      }
       
       setBasePlan(planData);
       
@@ -129,8 +150,12 @@ export default function Home() {
 
       // 2. Parallel Video & TTS
       setStage('Generating assets...');
-      addLog(`Starting generation with hook: "${selectedHook}"`);
-      addLog(fastMode ? 'FAST MODE: Skipping Hailuo, using Ken Burns fallback.' : 'Sending to Hailuo Video-01...');
+      
+      // Enforce Prompt Source of Truth: Use selectedHook if available, else user prompt (though flow requires hook)
+      const finalVideoPrompt = selectedHook || prompt; 
+      setFinalPrompt(finalVideoPrompt);
+      
+      addLog(`Starting generation with hook: "${finalVideoPrompt}"`);
       
       const ttsPromise = fetch('/api/tts', {
         method: 'POST',
@@ -138,31 +163,88 @@ export default function Home() {
           'Content-Type': 'application/json',
           'x-minimax-api-key': apiKey 
         },
-        body: JSON.stringify({ text: plan.voiceover_script }), 
+        body: JSON.stringify({ 
+          text: plan.voiceover_script,
+          mock: !apiKey
+        }), 
       }).then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        addLog('TTS generated successfully.');
+        addLog(!apiKey ? 'Using silent audio (Mock)...' : 'TTS generated successfully.');
         return data; // { id: string }
       });
 
-      const videoPromise = fetch('/api/video', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-minimax-api-key': apiKey 
-        },
-        body: JSON.stringify({ 
-          imageUrl, 
-          prompt: videoPrompt,
-          fastMode
-        }),
-      }).then(async (res) => {
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        addLog('Video generated successfully.');
-        return data; // { id: string }
-      });
+      let videoPromise;
+      
+      // Best-effort RunwayML path
+      if (useRunway && runwayApiKey && !fastMode) {
+         addLog('Attempting Runway Gen-3 Alpha (Best Effort)...');
+         videoPromise = fetch('/api/video/runway', {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'x-runway-api-key': runwayApiKey.trim() 
+            },
+            body: JSON.stringify({
+              prompt: finalVideoPrompt, // Runway video generation uses the same prompt text the user sees in the UI.
+              imageUrl,
+              source: selectedHook ? 'hook' : 'user_input'
+            })
+         }).then(async (res) => {
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            
+            if (!data.success) {
+              throw new Error(data.reason || 'Runway generation failed');
+            }
+
+            addLog('Runway video generated successfully!');
+            setVideoSource('runway');
+            return data; // { id: string }
+         }).catch((err) => {
+            addLog(`Runway failed (${err.message}). Falling back to MiniMax/FFmpeg...`);
+            // Fallback to MiniMax/Ken Burns
+            return fetch('/api/video', {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'x-minimax-api-key': apiKey 
+              },
+              body: JSON.stringify({ 
+                imageUrl, 
+                prompt: videoPrompt,
+                fastMode
+              }),
+            }).then(async (res) => {
+              if (!res.ok) throw new Error(await res.text());
+              const data = await res.json();
+              addLog('Fallback video generated successfully.');
+              setVideoSource('minimax');
+              return data;
+            });
+         });
+      } else {
+        // Standard Path
+        addLog(fastMode ? 'FAST MODE: Skipping Hailuo, using Ken Burns fallback.' : 'Sending to Hailuo Video-01...');
+        videoPromise = fetch('/api/video', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-minimax-api-key': apiKey 
+          },
+          body: JSON.stringify({ 
+            imageUrl, 
+            prompt: videoPrompt,
+            fastMode
+          }),
+        }).then(async (res) => {
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          addLog('Video generated successfully.');
+          setVideoSource(fastMode ? 'fallback' : 'minimax');
+          return data; // { id: string }
+        });
+      }
 
       const [ttsResult, videoResult] = await Promise.all([ttsPromise, videoPromise]);
 
@@ -239,14 +321,25 @@ export default function Home() {
 
           <div className="flex items-center gap-4">
              {/* API Key Input */}
-             <div className="bg-black/50 border border-neutral-800 rounded-lg px-3 py-1.5 flex items-center gap-2 w-64">
+             <div className="bg-black/50 border border-neutral-800 rounded-lg px-3 py-1.5 flex items-center gap-2 w-48">
                 <Key className="w-3.5 h-3.5 text-neutral-500" />
                 <input 
                   type="password" 
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="MiniMax API Key"
-                  className="bg-transparent border-none text-xs text-neutral-300 placeholder:text-neutral-600 focus:outline-none flex-1"
+                  placeholder="MiniMax Key"
+                  className="bg-transparent border-none text-xs text-neutral-300 placeholder:text-neutral-600 focus:outline-none flex-1 w-full"
+                />
+              </div>
+             {/* Runway Key Input */}
+             <div className="bg-black/50 border border-neutral-800 rounded-lg px-3 py-1.5 flex items-center gap-2 w-48">
+                <Key className="w-3.5 h-3.5 text-neutral-500" />
+                <input 
+                  type="password" 
+                  value={runwayApiKey}
+                  onChange={(e) => setRunwayApiKey(e.target.value)}
+                  placeholder="Runway Key (Optional)"
+                  className="bg-transparent border-none text-xs text-neutral-300 placeholder:text-neutral-600 focus:outline-none flex-1 w-full"
                 />
               </div>
           </div>
@@ -288,15 +381,34 @@ export default function Home() {
                   ))}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input
+                <input
                     type="url"
                     value={imageUrl}
                     onChange={(e) => setImageUrl(e.target.value)}
                     placeholder="Image URL (https://...)"
                     className="w-full bg-neutral-900/50 border border-neutral-800 rounded-xl p-3 focus:ring-2 focus:ring-violet-500 focus:outline-none transition-all text-sm"
                   />
-                  
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Runway Toggle */}
+                  <button
+                    onClick={() => setUseRunway(!useRunway)}
+                    disabled={fastMode}
+                    className={cn(
+                      "flex items-center justify-between px-4 py-3 rounded-xl border transition-all text-sm font-medium",
+                      useRunway && !fastMode
+                        ? "bg-indigo-900/20 border-indigo-500/50 text-indigo-200" 
+                        : "bg-neutral-900/50 border-neutral-800 text-neutral-400 hover:border-neutral-700",
+                      fastMode && "opacity-50 cursor-not-allowed"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Sparkles className={cn("w-4 h-4", useRunway && !fastMode ? "fill-indigo-500 text-indigo-500" : "text-neutral-500")} />
+                      <span>Runway Gen-3</span>
+                    </div>
+                    <span className="text-[10px] uppercase opacity-60">{useRunway ? 'ON' : 'OFF'}</span>
+                  </button>
+
                   {/* Fast Mode Toggle */}
                   <button
                     onClick={() => setFastMode(!fastMode)}
@@ -467,6 +579,20 @@ export default function Home() {
                {/* Notch */}
                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-neutral-800 rounded-b-2xl z-20 pointer-events-none" />
                
+               {/* Source Badge */}
+               {videoUrl && videoSource && (
+                 <div className="absolute top-8 left-0 right-0 z-30 flex justify-center pointer-events-none">
+                    <div className={cn(
+                      "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider backdrop-blur-md border shadow-lg",
+                      videoSource === 'runway' ? "bg-indigo-500/80 border-indigo-400 text-white" :
+                      videoSource === 'minimax' ? "bg-pink-500/80 border-pink-400 text-white" :
+                      "bg-amber-500/80 border-amber-400 text-white"
+                    )}>
+                      Video: {videoSource === 'runway' ? 'Runway Gen-3' : videoSource === 'minimax' ? 'MiniMax Hailuo' : 'Ken Burns Fallback'}
+                    </div>
+                 </div>
+               )}
+
                {videoUrl ? (
                  <video 
                    src={videoUrl} 
@@ -495,6 +621,24 @@ export default function Home() {
                </div>
              </div>
            </div>
+
+           {/* Transparency: Read-only Prompt */}
+           {videoUrl && finalPrompt && (
+             <div className="w-full max-w-[320px] mx-auto bg-neutral-900/50 border border-neutral-800 rounded-xl p-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
+               <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider block mb-1">
+                 Video Prompt Used:
+               </span>
+               <p className="text-xs text-neutral-300 font-mono break-words leading-relaxed">
+                 {finalPrompt}
+               </p>
+               {videoSource === 'fallback' && (
+                  <div className="mt-2 pt-2 border-t border-white/5 flex items-center gap-1.5 text-amber-500/80">
+                    <AlertCircle className="w-3 h-3" />
+                    <span className="text-[10px] font-medium">Fallback video used — prompt unchanged</span>
+                  </div>
+               )}
+             </div>
+           )}
 
            {/* Export Tools */}
            {step === 'complete' && (

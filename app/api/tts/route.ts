@@ -3,16 +3,33 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import ffmpeg from '@/lib/ffmpeg';
 
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
-    const { text } = await req.json();
+    const { text, mock } = await req.json();
     const apiKey = req.headers.get('x-minimax-api-key') || process.env.MINIMAX_API_KEY;
 
-    if (!apiKey) {
-      return new NextResponse('Missing API Key', { status: 401 });
+    // Handle Mock/No-Key Mode
+    if (mock || !apiKey) {
+        console.log('Using Mock TTS (Silence)...');
+        const id = uuidv4();
+        const filePath = path.join('/tmp', `${id}.mp3`);
+        
+        // Generate 5 seconds of silence
+        await new Promise<void>((resolve, reject) => {
+            ffmpeg()
+                .input('anullsrc')
+                .inputFormat('lavfi')
+                .duration(5)
+                .save(filePath)
+                .on('end', () => resolve())
+                .on('error', (err: any) => reject(err));
+        });
+        
+        return NextResponse.json({ id });
     }
 
     if (!text) {

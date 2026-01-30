@@ -3,11 +3,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
-
-// Configure ffmpeg
-ffmpeg.setFfmpegPath(ffmpegStatic as string);
+import ffmpeg from '@/lib/ffmpeg';
 
 const API_BASE = 'https://api.minimax.io/v1';
 
@@ -65,19 +61,15 @@ export async function POST(req: Request) {
     const { imageUrl, prompt, fastMode } = await req.json();
     const apiKey = req.headers.get('x-minimax-api-key') || process.env.MINIMAX_API_KEY;
 
-    if (!apiKey) {
-      return new NextResponse('Missing API Key', { status: 401 });
-    }
-
     if (!imageUrl || !prompt) {
       return new NextResponse('Missing image or prompt', { status: 400 });
     }
     
     const id = uuidv4();
-    let useFallback = !!fastMode;
+    let useFallback = !!fastMode || !apiKey;
 
-    // 1. Try MiniMax Video Generation (unless fastMode is true)
-    if (!useFallback) {
+    // 1. Try MiniMax Video Generation (unless fastMode is true or no key)
+    if (!useFallback && apiKey) {
       try {
         console.log('Attempting MiniMax Video Generation...');
         

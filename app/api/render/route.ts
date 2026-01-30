@@ -1,13 +1,9 @@
 import { NextResponse } from 'next/server';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
+import ffmpeg from '@/lib/ffmpeg';
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { Beat } from '@/lib/types';
-
-// Tell fluent-ffmpeg where to find the binary
-ffmpeg.setFfmpegPath(ffmpegStatic as string);
 
 export const maxDuration = 300;
 
