@@ -38,14 +38,14 @@ export async function POST(req: Request) {
     });
 
     // 1. Initiate Generation
-    // Using gen3a_turbo for speed/quality balance. 720:1280 is 9:16 vertical.
+    // Using gen3a_turbo for speed/quality balance. 768:1280 is the supported vertical resolution.
     const createRes = await axios.post(
       `${RUNWAY_API_BASE}/image_to_video`,
       {
         model: 'gen3a_turbo',
         promptImage: imageUrl,
         promptText: prompt,
-        ratio: '720:1280',
+        ratio: '768:1280',
         duration: 5, // Runway usually supports 5 or 10
       },
       {

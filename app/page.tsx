@@ -202,7 +202,12 @@ export default function Home() {
             setVideoSource('runway');
             return data; // { id: string }
          }).catch((err) => {
-            addLog(`Runway failed (${err.message}). Falling back to MiniMax/FFmpeg...`);
+            const isSafetyError = err.message.includes('SAFETY');
+            addLog(
+              isSafetyError 
+                ? `Runway Safety Block: ${err.message}. (Try removing celebrity names/NSFW terms).` 
+                : `Runway failed (${err.message}). Falling back to MiniMax/FFmpeg...`
+            );
             // Fallback to MiniMax/Ken Burns
             return fetch('/api/video', {
               method: 'POST',

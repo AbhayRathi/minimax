@@ -74,7 +74,7 @@ export async function POST(req: Request) {
         ])
         .complexFilter([
           `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[vscaled]`,
-          `[vscaled]subtitles='${escapedSrtPath}':force_style='Fontname=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=0,MarginV=60'[vfinal]`
+          `[vscaled]subtitles='${escapedSrtPath}':force_style='Fontname=Arial,FontSize=60,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=2,Shadow=0,MarginV=100'[vfinal]`
         ], 'vfinal')
         .save(outputPath)
         .on('end', () => resolve())
